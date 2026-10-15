@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest';
+
 import {
   candidateWords,
   detailScore,
@@ -6,7 +8,7 @@ import {
   parseExpiry,
   parseLot,
   parseSuklCode,
-} from '../ocr';
+} from '../ocr.ts';
 
 // Roughly what ML Kit returns for the side of a Hylak forte box (LOT from a real pack, EXP made up).
 const hylakBox = [

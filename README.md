@@ -1,121 +1,108 @@
 # Lékárnička
 
-Mobile app for a home medicine cabinet: add medicines by searching by name or active substance,
-track expiry dates with reminders, and find what you have at home for a given complaint
-("what helps with a headache?"). Built with Expo (SDK 57) on data from SÚKL, the Czech State Institute
-for Drug Control.
+A web app (PWA) for a home medicine cabinet: add medicines by searching by name or active substance,
+track expiry dates with push reminders, and find what you have at home for a given complaint
+("what helps with a headache?"). Data comes from SÚKL, the Czech State Institute for Drug Control.
+
+It installs from the browser ("Add to Home Screen" on iPhone, "Install app" on Android), works offline,
+and needs no app store.
 
 ## Getting started
 
-Requirements: Node.js ≥ 22.12 and the [Expo Go](https://expo.dev/go) app on your phone.
+Requirements: Node.js ≥ 22.12.
 
 ```bash
 npm install
-npx expo start          # scan the QR code with Expo Go (Android) or the Camera app (iOS)
+npm run dev        # http://localhost:5173
 ```
-
-The app runs entirely in Expo Go: it only uses native modules that Expo Go already contains
-(`expo-sqlite`, `expo-notifications`, `expo-web-browser`).
 
 Other commands:
 
 ```bash
-npm test                # unit tests (OCR parsing, expiry logic)
+npm test           # unit tests (Vitest)
 npm run typecheck
-npx expo lint
+npm run lint       # oxlint
+npm run build      # production build into dist/, including the service worker
+npm run preview    # serve the production build locally
 ```
 
-## Sharing with testers (free, iOS and Android)
+## Deployment (Vercel)
 
-The app is published with EAS Update to the `preview` channel of the Expo project
-[@vojtysek/pills](https://expo.dev/accounts/vojtysek/projects/pills). Testers install
-[Expo Go](https://expo.dev/go) and scan [docs/expo-go-qr.png](docs/expo-go-qr.png) (on iPhone with the Camera
-app), or open this link on the phone:
+Import the repository in Vercel. `vercel.json` sets the build, routes every path to the app and makes sure
+the service worker is never cached. Then:
 
-```
-exp://u.expo.dev/a455ff01-6209-4070-b468-f3a2b6ee42b1?channel-name=preview&runtime-version=1.0.0
-```
-
-The link always opens the latest published version. To publish changes:
-
-```bash
-npm run publish-preview -- --message "What changed"
-```
-
-The `runtime-version` in the link follows the app version in `app.json`; if you bump that version,
-regenerate the link and QR code.
+1. Add the environment variable `VITE_NTFY_URL` (your ntfy server, see `.env.example`).
+2. Add your domain in Vercel → Project → Domains.
 
 ## How it works
 
 ### Data
 
 SÚKL publishes the full medicines database monthly as
-[open data](https://opendata.sukl.cz/?q=katalog/databaze-lecivych-pripravku-dlp). `scripts/build-db.ts`
-converts that export into `assets/db/sukl.db` (~70k products, 23 MB), which ships inside the app. That gives
-instant offline search by name or active substance, which the SÚKL REST API doesn't offer: the API only
-looks products up by SÚKL code.
+[open data](https://opendata.sukl.cz/?q=katalog/databaze-lecivych-pripravku-dlp). `scripts/build-data.ts`
+converts the export into `public/data/sukl-YYYY-MM.json`: ~64k medicines (~70k registrations, with the
+same medicine and pack size merged), ~8 MB, ~0.9 MB over the wire. The app loads it once and searches it in
+memory; the service worker precaches it, so the app works offline from the first visit.
 
-To update the data (do this when a new month is published):
+To update the data when a new month is published:
 
 ```bash
-npm run build-db -- https://opendata.sukl.cz/soubory/SOD20260925/DLP20260925.zip   # zip URL, local zip, or extracted folder
+npm run build-data -- https://opendata.sukl.cz/soubory/SOD20260925/DLP20260925.zip   # zip URL, local zip, or extracted folder
 ```
 
-The app stores its copy under a versioned name (`sukl-YYYY-MM.db`), so a new build replaces the old data
-on users' phones. User data lives in a separate `cabinet.db` and is never touched by updates.
+The [SÚKL REST API](https://prehledy.sukl.cz/docs/?url=/dlp.api.json) can't be called from a browser (no CORS
+headers), so it's used only to link to the patient leaflet PDF (`/dokumenty/{kodSukl}/pil`).
 
-The [SÚKL REST API](https://prehledy.sukl.cz/docs/?url=/dlp.api.json) (`prehledy.sukl.cz/dlp/v1`) is
-used only to open the patient leaflet PDF (`/dokumenty/{kodSukl}/pil`).
+### The cabinet
+
+Stored in the browser's IndexedDB (`src/db/cabinet.ts`) and never sent anywhere. Settings → Záloha exports
+and restores it as JSON. On iPhone, data of a web app added to the Home Screen is kept; in a plain Safari tab
+it may be cleared after weeks of not using the site.
+
+### Expiry reminders (ntfy)
+
+Reminders are scheduled as delayed messages on an [ntfy](https://ntfy.sh) server, 30 days before expiry and
+the morning after (`src/lib/reminders.ts`). Each user gets a random topic and subscribes to it in the ntfy app.
+Each reminder has a fixed sequence ID per item, so editing an item reschedules it and deleting cancels it.
+
+Requirements for the ntfy server (`server.yml`):
+
+```yaml
+message-delay-limit: 8760h            # allow scheduling a year ahead; the default is 3 days
+upstream-base-url: "https://ntfy.sh"  # instant delivery to the ntfy iOS app from a self-hosted server
+```
+
+and ntfy ≥ 2.16 (cancelling scheduled messages). The public ntfy.sh keeps the 3-day limit, so reminders need
+a self-hosted server.
 
 ### Identifying a medicine
 
-Medicines are added by searching the bundled database by name or active substance
-(`searchProducts` in `src/db/reference.ts`). Barcodes can't be used to identify a product directly:
+Barcodes can't identify a product: SÚKL publishes no barcode → product mapping (the `EAN` column in the open
+data is empty), the 2D DataMatrix doesn't contain the SÚKL code, and almost no OTC packs carry it. Medicines are
+added by searching by name or active substance instead.
 
-- SÚKL publishes no barcode → product mapping (the `EAN` column in the open data is empty for all rows).
-- The 2D DataMatrix code (EU anti-counterfeiting) doesn't contain the SÚKL code, and almost no OTC packs
-  carry it (9 of ~1,270 marketed OTC products).
-- Open product databases (Open Food Facts, Open Products Facts, UPCitemdb) don't cover Czech medicines.
-
-**Planned: reading the box from a photo.** The matching logic is already written and unit-tested
-(`src/lib/ocr.ts`, `matchPhoto` in `src/db/reference.ts`) but not wired into the UI, because on-device
-text recognition is a native module that Expo Go doesn't include. Enabling it means adding
-`expo-text-extractor` + `expo-image-picker` and switching to a development build. The pipeline:
-
-1. On-device OCR (ML Kit / Apple Vision via `expo-text-extractor`) reads the text. Photos never leave
-   the phone. Several photos can be combined (name on the front, EXP/LOT on a flap).
-2. A printed "Kód SÚKL" identifies the exact variant when present.
-3. Otherwise known product names are found in the text, and variants are ranked by how well their
-   pack details ("POR SOL 100ML") match the text.
-4. If no name matches, words one typo away from a product name are tried.
-5. EXP and LOT are parsed from the text; the user confirms everything before saving.
+**Planned: reading the box from a photo.** The matching logic is written and unit-tested (`src/lib/ocr.ts`:
+finds product names, EXP, LOT and a printed "Kód SÚKL" in recognized text). In the browser, OCR can run with
+Tesseract.js.
 
 ### Symptom search
 
-`src/data/symptoms.ts` maps everyday complaints to ATC drug groups (e.g. headache → N02B, M01AE).
-The app shows matching medicines from the user's cabinet, then OTC products available in pharmacies.
-The mapping is hand-curated and is not medical advice.
-
-### Expiry reminders
-
-Local notifications (`expo-notifications`) fire 30 days before expiry and the morning after the last
-valid day. Month-only dates (`EXP 08/2027`) mean "valid until the end of that month".
+`src/data/symptoms.ts` maps everyday complaints to ATC drug groups (e.g. headache → N02B, M01AE). The app shows
+matching medicines from the cabinet, then OTC products sold in pharmacies. The mapping is hand-curated and is
+not medical advice.
 
 ## Project structure
 
 ```
-scripts/build-db.ts       SÚKL open data → assets/db/sukl.db
-src/app/                  screens (Expo Router)
-  (tabs)/index.tsx        cabinet
-  (tabs)/symptoms.tsx     "what's bothering me"
-  add.tsx                 search → add to cabinet
-  item/[id].tsx           cabinet item detail and edit
-  product/[sukl].tsx      product detail
-  symptom/[id].tsx        medicines for a complaint
-src/db/reference.ts       queries on the SÚKL database
-src/db/cabinet.ts         user data (separate database with migrations)
-src/lib/ocr.ts            OCR text → name, EXP, LOT, SÚKL code (pure, unit-tested; not in the UI yet)
-src/lib/expiry.ts         expiry dates and reminder times (pure, unit-tested)
-src/lib/reminders.ts      notification scheduling
-src/data/symptoms.ts      complaint → ATC group mapping
+scripts/build-data.ts       SÚKL open data → public/data/sukl-YYYY-MM.json
+src/main.tsx                routes
+src/layout.tsx              tab bar, loading and error screens
+src/pages/                  screens: cabinet, add, item, product, symptoms, settings
+src/db/reference.ts         SÚKL data: loading and in-memory search
+src/db/cabinet.ts           user's cabinet (IndexedDB)
+src/lib/reminders.ts        ntfy scheduling
+src/lib/expiry.ts           expiry dates and reminder times
+src/lib/variants.ts         merging registrations of the same medicine
+src/lib/ocr.ts              recognized text → name, EXP, LOT, SÚKL code (not in the UI yet)
+src/data/symptoms.ts        complaint → ATC group mapping
 ```

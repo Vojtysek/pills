@@ -1,4 +1,4 @@
-import { normalize } from './text';
+import { normalize } from './text.ts';
 
 // Pure helpers that turn OCR output (lines of text read from a photo of the box)
 // into structured data. Kept free of React/Expo imports so they're unit-testable.
