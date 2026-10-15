@@ -1,4 +1,6 @@
-import { daysUntil, expiryStatus, formatExpiry, parseExpiryInput, reminderDates } from '../expiry';
+import { describe, expect, it } from 'vitest';
+
+import { daysUntil, expiryStatus, formatExpiry, parseExpiryInput, reminderDates } from '../expiry.ts';
 
 const now = new Date(2026, 9, 15, 12, 0); // 15 Oct 2026
 

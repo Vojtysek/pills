@@ -1,4 +1,6 @@
-import { groupVariants, packKey } from '../variants';
+import { describe, expect, it } from 'vitest';
+
+import { groupVariants, packKey } from '../variants.ts';
 
 describe('packKey', () => {
   it('treats a single pack written as 1X the same', () => {

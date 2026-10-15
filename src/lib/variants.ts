@@ -1,4 +1,4 @@
-import { normalize } from './text';
+import { normalize } from './text.ts';
 
 // SÚKL lists one product per registration, so the same medicine often appears several times:
 // different marketing-authorisation holders, or "POR SOL 100ML" vs "POR SOL 1X100ML".

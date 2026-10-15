@@ -1,171 +1,122 @@
-import { useSQLiteContext, type SQLiteDatabase } from 'expo-sqlite';
+import { use } from 'react';
 
-import {
-  candidateWords,
-  detailScore,
-  editDistance,
-  findNamesInText,
-  parseExpiry,
-  parseLot,
-  parseSuklCode,
-} from '@/lib/ocr';
-import { tokenize } from '@/lib/text';
-import { groupVariants } from '@/lib/variants';
+import { FLAG_MARKETED, FLAG_OTC, type ReferenceData } from '../data/reference-format.ts';
+import { REFERENCE_DATA_URL } from '../data/reference-version.ts';
+import { normalize, tokenize } from '../lib/text.ts';
 
-// Read-only access to the bundled SÚKL database (assets/db/sukl.db, built by scripts/build-db.ts).
+// Read-only SÚKL data, loaded once from public/data and searched in memory.
 
-export const SUKL_API = 'https://prehledy.sukl.cz/dlp/v1';
-
-export function useReferenceDb(): SQLiteDatabase {
-  return useSQLiteContext();
-}
-
-export type ProductSummary = {
+export type Product = {
   sukl: string;
   name: string;
   supplement: string;
-  atc: string | null;
-  otc: number;
-  marketed: number;
-};
-
-export type ProductDetail = ProductSummary & {
-  strength: string;
   formName: string | null;
   routeName: string | null;
+  atc: string | null;
   atcName: string | null;
   dispensingName: string | null;
+  otc: boolean;
+  marketed: boolean;
   holderName: string | null;
-  ingredients: { name: string; amount: string | null; unit: string | null }[];
+  ingredients: { name: string; amount: string; unit: string }[];
+  /** SÚKL codes of the same medicine registered again (other holder, "1X" pack notation). */
+  otherCodes: string[];
 };
 
-const SUMMARY_COLUMNS = 'p.sukl, p.name, p.supplement, p.atc, p.otc, p.marketed';
+export type Reference = {
+  version: string;
+  products: Product[];
+  byCode: Map<string, Product>;
+  /** ' WORD WORD ' per product, aligned with `products`, for word-prefix search. */
+  searchKeys: string[];
+};
+
+let loading: Promise<Reference> | null = null;
+
+export function loadReference(): Promise<Reference> {
+  loading ??= fetch(REFERENCE_DATA_URL)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Nepodařilo se načíst data SÚKL (${res.status})`);
+      return res.json() as Promise<ReferenceData>;
+    })
+    .then(buildReference)
+    .catch((error) => {
+      loading = null; // allow a retry
+      throw error;
+    });
+  return loading;
+}
+
+/** Suspends until the data is loaded; wrap callers in <Suspense>. */
+export function useReference(): Reference {
+  return use(loadReference());
+}
+
+export function buildReference(data: ReferenceData): Reference {
+  const products: Product[] = [];
+  const searchKeys: string[] = [];
+  const byCode = new Map<string, Product>();
+
+  for (const [sukl, name, supplement, form, route, atc, dispensing, flags, holder, ingredients, otherCodes] of data.products) {
+    const substances = ingredients.map(([index]) => data.substances[index]);
+    const product: Product = {
+      sukl,
+      name,
+      supplement,
+      formName: data.forms[form] ?? null,
+      routeName: data.routes[route] ?? null,
+      atc: atc || null,
+      atcName: data.atc[atc] ?? null,
+      dispensingName: data.dispensing[dispensing] ?? null,
+      otc: (flags & FLAG_OTC) !== 0,
+      marketed: (flags & FLAG_MARKETED) !== 0,
+      holderName: data.holders[holder] ?? null,
+      ingredients: ingredients.map(([index, amount, unit]) => ({ name: data.substances[index][0], amount, unit })),
+      otherCodes,
+    };
+    products.push(product);
+    const words = new Set(normalize([name, supplement, ...substances.flat()].join(' ')).split(' '));
+    searchKeys.push(` ${[...words].join(' ')} `);
+    byCode.set(sukl, product);
+    for (const code of otherCodes) byCode.set(code, product);
+  }
+  return { version: data.version, products, byCode, searchKeys };
+}
 
 /**
- * Every word of the query must start a word of the name, pack details or active substance.
- * Registrations of the same medicine and pack size are merged into one row (see groupVariants).
+ * Every word of the query must start a word of the name, pack details or an active substance
+ * (Czech, Latin or English name). Products whose name starts with the query come first.
  */
-export async function searchProducts(db: SQLiteDatabase, query: string, limit = 50): Promise<ProductSummary[]> {
+export function searchProducts(ref: Reference, query: string, limit = 50): Product[] {
   const words = tokenize(query);
   if (words.length === 0) return [];
-  const where = words.map(() => 'p.search_key LIKE ?').join(' AND ');
-  // Grouped by name in SQL order so all variants of one medicine are fetched together,
-  // marketed ones first within each name; extra rows make up for the merging.
-  const rows = await db.getAllAsync<ProductSummary>(
-    `SELECT ${SUMMARY_COLUMNS} FROM product p
-     WHERE ${where}
-     ORDER BY p.name_key LIKE ? DESC, p.name_key, p.marketed DESC, p.otc DESC, p.supplement
-     LIMIT ?`,
-    [...words.map((w) => `% ${w}%`), `${words[0]}%`, limit * 4]
-  );
-  return groupVariants(rows)
-    .sort((a, b) => b.marketed - a.marketed)
+  const needles = words.map((w) => ` ${w}`);
+  const matches: Product[] = [];
+  ref.searchKeys.forEach((key, i) => {
+    if (needles.every((n) => key.includes(n))) matches.push(ref.products[i]);
+  });
+  const nameStarts = (p: Product) => normalize(p.name).startsWith(words[0]);
+  return matches
+    .sort(
+      (a, b) =>
+        Number(nameStarts(b)) - Number(nameStarts(a)) ||
+        Number(b.marketed) - Number(a.marketed) ||
+        Number(b.otc) - Number(a.otc)
+    )
     .slice(0, limit);
 }
 
-export async function getProduct(db: SQLiteDatabase, sukl: string): Promise<ProductDetail | null> {
-  const product = await db.getFirstAsync<Omit<ProductDetail, 'ingredients'>>(
-    `SELECT ${SUMMARY_COLUMNS}, p.strength,
-       f.name AS formName, r.name AS routeName, a.name AS atcName, d.name AS dispensingName, o.name AS holderName
-     FROM product p
-     LEFT JOIN form f ON f.code = p.form
-     LEFT JOIN route r ON r.code = p.route
-     LEFT JOIN atc a ON a.code = p.atc
-     LEFT JOIN dispensing d ON d.code = p.dispensing
-     LEFT JOIN organization o ON o.code = p.holder AND o.country = p.holder_country
-     WHERE p.sukl = ?`,
-    [sukl]
-  );
-  if (!product) return null;
-  const ingredients = await db.getAllAsync<ProductDetail['ingredients'][number]>(
-    `SELECT COALESCE(s.name, s.name_inn) AS name, i.amount, i.unit
-     FROM ingredient i JOIN substance s ON s.code = i.substance
-     WHERE i.sukl = ? ORDER BY i.position`,
-    [sukl]
-  );
-  return { ...product, ingredients };
-}
-
-/** OTC products on the market in the given ATC groups, one row per product name. */
-export async function getOtcProductsForAtc(db: SQLiteDatabase, atcPrefixes: string[]): Promise<ProductSummary[]> {
-  if (atcPrefixes.length === 0) return [];
-  const where = atcPrefixes.map(() => 'p.atc LIKE ?').join(' OR ');
-  return db.getAllAsync<ProductSummary>(
-    `SELECT ${SUMMARY_COLUMNS} FROM product p
-     WHERE p.otc = 1 AND p.marketed = 1 AND (${where})
-     GROUP BY p.name_key
-     ORDER BY p.name_key`,
-    atcPrefixes.map((prefix) => `${prefix}%`)
-  );
-}
-
-export type PhotoMatch = {
-  candidates: ProductSummary[];
-  expiresOn: string | null;
-  lot: string | null;
-};
-
-let nameKeys: string[] | null = null;
-
-async function getNameKeys(db: SQLiteDatabase): Promise<string[]> {
-  if (!nameKeys) {
-    const rows = await db.getAllAsync<{ name_key: string }>('SELECT DISTINCT name_key FROM product');
-    nameKeys = rows.map((r) => r.name_key);
-  }
-  return nameKeys;
-}
-
-/**
- * Turns text read from a photo of the box into ranked product candidates plus expiry and LOT.
- * 1. A printed SÚKL code identifies the exact variant.
- * 2. Otherwise find known product names in the text and rank their variants by pack details.
- * 3. If no name matched exactly, retry with words one OCR typo away from a name's first word.
- */
-export async function matchPhoto(db: SQLiteDatabase, lines: string[]): Promise<PhotoMatch> {
-  const expiresOn = parseExpiry(lines);
-  const lot = parseLot(lines);
-
-  const sukl = parseSuklCode(lines);
-  if (sukl) {
-    const exact = await db.getAllAsync<ProductSummary>(`SELECT ${SUMMARY_COLUMNS} FROM product p WHERE p.sukl = ?`, [sukl]);
-    if (exact.length > 0) return { candidates: exact, expiresOn, lot };
-  }
-
-  const keys = await getNameKeys(db);
-  let names = findNamesInText(lines, keys).map((m) => m.nameKey);
-  if (names.length === 0) names = fuzzyNames(lines, keys);
-  if (names.length === 0) return { candidates: [], expiresOn, lot };
-
-  const rows = await db.getAllAsync<ProductSummary>(
-    `SELECT ${SUMMARY_COLUMNS} FROM product p WHERE p.name_key IN (${names.map(() => '?').join(', ')})`,
-    names
-  );
-  const rank = (p: ProductSummary) => names.indexOf(normalizeName(p.name));
-  const candidates = rows
-    .map((p) => ({ p, score: detailScore(lines, p.supplement) }))
-    .sort((a, b) => rank(a.p) - rank(b.p) || b.score - a.score || b.p.marketed - a.p.marketed)
-    .map(({ p }) => p)
-    .slice(0, 20);
-  return { candidates, expiresOn, lot };
-}
-
-function normalizeName(name: string): string {
-  return tokenize(name).join(' ');
-}
-
-function fuzzyNames(lines: string[], keys: string[], limit = 5): string[] {
-  const words = candidateWords(lines);
-  const found: string[] = [];
-  for (const key of keys) {
-    const first = key.split(' ')[0];
-    if (first.length >= 4 && words.some((w) => Math.abs(w.length - first.length) <= 1 && editDistance(w, first) <= 1)) {
-      found.push(key);
-      if (found.length >= limit) break;
-    }
-  }
-  return found;
+/** OTC medicines on the market in the given ATC groups, one per name. */
+export function otcProductsForAtc(ref: Reference, atcPrefixes: string[]): Product[] {
+  const seen = new Set<string>();
+  return ref.products.filter((p) => {
+    if (!p.otc || !p.marketed || !p.atc || !atcPrefixes.some((prefix) => p.atc!.startsWith(prefix))) return false;
+    if (seen.has(p.name)) return false;
+    seen.add(p.name);
+    return true;
+  });
 }
 
 export function leafletUrl(sukl: string): string {
-  return `${SUKL_API}/dokumenty/${sukl}/pil`;
+  return `https://prehledy.sukl.cz/dlp/v1/dokumenty/${sukl}/pil`;
 }

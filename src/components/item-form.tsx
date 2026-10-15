@@ -1,11 +1,7 @@
-import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useState, type FormEvent } from 'react';
 
-import { ThemedText } from '@/components/themed-text';
-import { Button, TextField } from '@/components/ui';
-import { Spacing } from '@/constants/theme';
-import type { NewCabinetItem } from '@/db/cabinet';
-import { formatExpiry, parseExpiryInput } from '@/lib/expiry';
+import type { NewCabinetItem } from '../db/cabinet.ts';
+import { formatExpiry, parseExpiryInput } from '../lib/expiry.ts';
 
 type Props = {
   initial: NewCabinetItem;
@@ -18,53 +14,62 @@ type Props = {
 export function ItemForm({ initial, nameEditable, submitTitle, onSubmit }: Props) {
   const [name, setName] = useState(initial.name);
   const [expiry, setExpiry] = useState(initial.expiresOn ? formatExpiry(initial.expiresOn) : '');
-  const [lot, setLot] = useState(initial.lot ?? '');
   const [note, setNote] = useState(initial.note ?? '');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const expiresOn = expiry.trim() ? parseExpiryInput(expiry) : null;
   const expiryInvalid = expiry.trim() !== '' && expiresOn === null;
-  const canSave = name.trim() !== '' && !expiryInvalid;
+  const canSave = name.trim() !== '' && !expiryInvalid && !saving;
 
-  async function submit() {
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!canSave) return;
     setSaving(true);
+    setError(null);
     try {
-      await onSubmit({
-        ...initial,
-        name: name.trim(),
-        expiresOn,
-        lot: lot.trim() || null,
-        note: note.trim() || null,
-      });
+      await onSubmit({ ...initial, name: name.trim(), expiresOn, note: note.trim() || null });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <View style={styles.form}>
-      {nameEditable && <TextField label="Název" value={name} onChangeText={setName} />}
-      <TextField
-        label="Použitelné do (EXP)"
-        placeholder="MM/RRRR"
-        keyboardType="numbers-and-punctuation"
-        value={expiry}
-        onChangeText={setExpiry}
-      />
-      {expiryInvalid && (
-        <ThemedText type="small" themeColor="danger">
-          Zadejte datum jako 08/2027 nebo 15.8.2027
-        </ThemedText>
+    <form className="form" onSubmit={submit}>
+      {nameEditable && (
+        <div className="field">
+          <label htmlFor="name">Název</label>
+          <input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
+        </div>
       )}
-      <TextField label="Šarže (LOT)" autoCapitalize="characters" value={lot} onChangeText={setLot} />
-      <TextField label="Poznámka" placeholder="Např. pro děti, otevřeno 1. 10." value={note} onChangeText={setNote} />
-      <Button title={submitTitle} onPress={submit} disabled={!canSave} loading={saving} />
-    </View>
+      <div className="field">
+        <label htmlFor="expiry">Použitelné do (EXP)</label>
+        <input
+          id="expiry"
+          placeholder="MM.RRRR"
+          inputMode="decimal"
+          autoComplete="off"
+          value={expiry}
+          onChange={(e) => setExpiry(e.target.value)}
+          aria-invalid={expiryInvalid}
+        />
+        {expiryInvalid && <p className="small error">Zadejte datum jako 08.2027 nebo 15.8.2027</p>}
+      </div>
+      <div className="field">
+        <label htmlFor="note">Poznámka</label>
+        <input
+          id="note"
+          placeholder="Např. pro děti, otevřeno 1. 10."
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </div>
+      {error && <p className="small error">{error}</p>}
+      <button className="button" type="submit" disabled={!canSave}>
+        {saving ? 'Ukládám…' : submitTitle}
+      </button>
+    </form>
   );
 }
-
-const styles = StyleSheet.create({
-  form: {
-    gap: Spacing.three,
-  },
-});

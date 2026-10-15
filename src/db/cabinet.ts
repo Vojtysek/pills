@@ -1,9 +1,8 @@
-import { deleteDatabaseAsync, openDatabaseSync } from 'expo-sqlite';
+import { openDB, type DBSchema } from 'idb';
+import { useEffect, useState } from 'react';
 
-import { REFERENCE_DB_VERSION } from './reference-version';
-
-// The user's own medicine cabinet. Lives in its own database so that replacing the bundled
-// SÚKL database with a newer month never touches user data.
+// The user's medicine cabinet, stored in the browser (IndexedDB). Nothing leaves the device
+// except reminder texts sent to the user's own ntfy server (see lib/reminders.ts).
 
 export type CabinetItem = {
   id: number;
@@ -15,125 +14,82 @@ export type CabinetItem = {
   atc: string | null;
   /** Last day the pack may be used, YYYY-MM-DD. */
   expiresOn: string | null;
-  lot: string | null;
   note: string | null;
-  notificationIds: string[];
   createdAt: string;
 };
 
-export type NewCabinetItem = Pick<CabinetItem, 'sukl' | 'name' | 'detail' | 'atc' | 'expiresOn' | 'lot' | 'note'>;
+export type NewCabinetItem = Pick<CabinetItem, 'sukl' | 'name' | 'detail' | 'atc' | 'expiresOn' | 'note'>;
 
-const MIGRATIONS = [
-  `CREATE TABLE item (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sukl TEXT,
-    name TEXT NOT NULL,
-    detail TEXT,
-    atc TEXT,
-    expires_on TEXT,
-    lot TEXT,
-    note TEXT,
-    notification_ids TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
-];
-
-const db = openDatabaseSync('cabinet.db');
-migrate();
-
-function migrate() {
-  const { user_version: version } = db.getFirstSync<{ user_version: number }>('PRAGMA user_version')!;
-  for (let v = version; v < MIGRATIONS.length; v++) {
-    db.withTransactionSync(() => {
-      db.execSync(MIGRATIONS[v]);
-      db.execSync(`PRAGMA user_version = ${v + 1}`);
-    });
-  }
+interface CabinetSchema extends DBSchema {
+  items: { key: number; value: CabinetItem };
 }
 
-type ItemRow = {
-  id: number;
-  sukl: string | null;
-  name: string;
-  detail: string | null;
-  atc: string | null;
-  expires_on: string | null;
-  lot: string | null;
-  note: string | null;
-  notification_ids: string;
-  created_at: string;
-};
+const dbPromise = openDB<CabinetSchema>('lekarnicka', 1, {
+  upgrade(db) {
+    db.createObjectStore('items', { keyPath: 'id', autoIncrement: true });
+  },
+});
 
-function toItem(row: ItemRow): CabinetItem {
-  return {
-    id: row.id,
-    sukl: row.sukl,
-    name: row.name,
-    detail: row.detail,
-    atc: row.atc,
-    expiresOn: row.expires_on,
-    lot: row.lot,
-    note: row.note,
-    notificationIds: JSON.parse(row.notification_ids),
-    createdAt: row.created_at,
-  };
+const changes = new EventTarget();
+
+function notifyChange() {
+  changes.dispatchEvent(new Event('change'));
 }
 
 /** Soonest expiry first; items without a date at the end. */
 export async function listItems(): Promise<CabinetItem[]> {
-  const rows = await db.getAllAsync<ItemRow>(
-    'SELECT * FROM item ORDER BY expires_on IS NULL, expires_on, name COLLATE NOCASE'
-  );
-  return rows.map(toItem);
-}
-
-export async function getItem(id: number): Promise<CabinetItem | null> {
-  const row = await db.getFirstAsync<ItemRow>('SELECT * FROM item WHERE id = ?', [id]);
-  return row ? toItem(row) : null;
-}
-
-export async function addItem(item: NewCabinetItem): Promise<number> {
-  const result = await db.runAsync(
-    'INSERT INTO item (sukl, name, detail, atc, expires_on, lot, note) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [item.sukl, item.name, item.detail, item.atc, item.expiresOn, item.lot, item.note]
-  );
-  return result.lastInsertRowId;
-}
-
-export async function updateItem(id: number, item: NewCabinetItem): Promise<void> {
-  await db.runAsync(
-    'UPDATE item SET sukl = ?, name = ?, detail = ?, atc = ?, expires_on = ?, lot = ?, note = ? WHERE id = ?',
-    [item.sukl, item.name, item.detail, item.atc, item.expiresOn, item.lot, item.note, id]
+  const items = await (await dbPromise).getAll('items');
+  return items.sort(
+    (a, b) =>
+      (a.expiresOn ?? '9999').localeCompare(b.expiresOn ?? '9999') || a.name.localeCompare(b.name, 'cs')
   );
 }
 
-export async function setNotificationIds(id: number, ids: string[]): Promise<void> {
-  await db.runAsync('UPDATE item SET notification_ids = ? WHERE id = ?', [JSON.stringify(ids), id]);
+export async function getItem(id: number): Promise<CabinetItem | undefined> {
+  return (await dbPromise).get('items', id);
+}
+
+export async function addItem(item: NewCabinetItem): Promise<CabinetItem> {
+  const db = await dbPromise;
+  const draft = { ...item, createdAt: new Date().toISOString() } as Omit<CabinetItem, 'id'>;
+  // autoIncrement assigns the id when the key is missing.
+  const id = await db.add('items', draft as CabinetItem);
+  notifyChange();
+  return { ...draft, id };
+}
+
+export async function updateItem(item: CabinetItem): Promise<void> {
+  await (await dbPromise).put('items', item);
+  notifyChange();
 }
 
 export async function deleteItem(id: number): Promise<void> {
-  await db.runAsync('DELETE FROM item WHERE id = ?', [id]);
+  await (await dbPromise).delete('items', id);
+  notifyChange();
 }
 
-/** Items whose ATC code falls into any of the groups (used by the symptom search). */
-export async function listItemsForAtc(atcPrefixes: string[]): Promise<CabinetItem[]> {
-  if (atcPrefixes.length === 0) return [];
-  const where = atcPrefixes.map(() => 'atc LIKE ?').join(' OR ');
-  const rows = await db.getAllAsync<ItemRow>(
-    `SELECT * FROM item WHERE ${where} ORDER BY expires_on IS NULL, expires_on`,
-    atcPrefixes.map((prefix) => `${prefix}%`)
-  );
-  return rows.map(toItem);
+/** Replaces the whole cabinet, e.g. when restoring a backup. */
+export async function replaceAll(items: CabinetItem[]): Promise<void> {
+  const db = await dbPromise;
+  const tx = db.transaction('items', 'readwrite');
+  await tx.store.clear();
+  for (const item of items) await tx.store.put(item);
+  await tx.done;
+  notifyChange();
 }
 
-export const referenceDbName = `sukl-${REFERENCE_DB_VERSION}.db`;
-
-/** Deletes the copy of last month's reference database after an app update ships a newer one. */
-export async function removeOutdatedReferenceDb(): Promise<void> {
-  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM setting WHERE key = 'reference_db'");
-  if (row && row.value !== referenceDbName) {
-    await deleteDatabaseAsync(row.value).catch(() => {});
-  }
-  await db.runAsync("INSERT OR REPLACE INTO setting (key, value) VALUES ('reference_db', ?)", [referenceDbName]);
+/** All items, kept up to date when anything changes. `null` while loading. */
+export function useCabinetItems(): CabinetItem[] | null {
+  const [items, setItems] = useState<CabinetItem[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = () => listItems().then((loaded) => active && setItems(loaded));
+    load();
+    changes.addEventListener('change', load);
+    return () => {
+      active = false;
+      changes.removeEventListener('change', load);
+    };
+  }, []);
+  return items;
 }

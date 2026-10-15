@@ -10,7 +10,7 @@ const DIACRITICS: Record<string, string> = {
 export function normalize(input: string): string {
   return input
     .toUpperCase()
-    .replace(/[^\x00-\x7F]/g, (ch) => DIACRITICS[ch] ?? ' ')
+    .replace(/[\u0080-\uffff]/g, (ch) => DIACRITICS[ch] ?? ' ')
     .replace(/[^A-Z0-9]+/g, ' ')
     .trim();
 }

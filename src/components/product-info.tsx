@@ -1,44 +1,21 @@
-import * as WebBrowser from 'expo-web-browser';
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { leafletUrl, type Product } from '../db/reference.ts';
 
-import { ThemedText } from '@/components/themed-text';
-import { Button, SectionTitle } from '@/components/ui';
-import { Spacing } from '@/constants/theme';
-import { getProduct, leafletUrl, useReferenceDb, type ProductDetail } from '@/db/reference';
-
-export function useProduct(sukl: string | null | undefined): ProductDetail | null {
-  const db = useReferenceDb();
-  const [product, setProduct] = useState<ProductDetail | null>(null);
-  useEffect(() => {
-    if (!sukl) return;
-    let active = true;
-    getProduct(db, sukl).then((p) => active && setProduct(p));
-    return () => {
-      active = false;
-    };
-  }, [db, sukl]);
-  return sukl ? product : null;
-}
-
-export function ProductInfo({ product }: { product: ProductDetail }) {
+export function ProductInfo({ product }: { product: Product }) {
   return (
-    <View style={styles.container}>
-      <SectionTitle>Složení</SectionTitle>
+    <div className="facts">
+      <h2>Složení</h2>
       {product.ingredients.length > 0 ? (
         product.ingredients.map((i, index) => (
-          <ThemedText key={index} type="small">
+          <p key={index} className="small">
             {i.name}
-            {i.amount ? ` — ${i.amount} ${i.unit ?? ''}` : ''}
-          </ThemedText>
+            {i.amount ? ` — ${i.amount} ${i.unit}` : ''}
+          </p>
         ))
       ) : (
-        <ThemedText type="small" themeColor="textSecondary">
-          Neuvedeno
-        </ThemedText>
+        <p className="small muted">Neuvedeno</p>
       )}
 
-      <SectionTitle>O přípravku</SectionTitle>
+      <h2>O přípravku</h2>
       <Fact label="Skupina" value={product.atcName && `${product.atcName} (${product.atc})`} />
       <Fact label="Léková forma" value={product.formName} />
       <Fact label="Podání" value={product.routeName} />
@@ -46,34 +23,21 @@ export function ProductInfo({ product }: { product: ProductDetail }) {
       <Fact label="Držitel registrace" value={product.holderName} />
       <Fact label="Kód SÚKL" value={product.sukl} />
 
-      <View style={styles.leaflet}>
-        <Button
-          title="Příbalová informace (PDF)"
-          variant="secondary"
-          onPress={() => WebBrowser.openBrowserAsync(leafletUrl(product.sukl))}
-        />
-      </View>
-    </View>
+      <p style={{ marginTop: 16 }}>
+        <a className="button secondary" href={leafletUrl(product.sukl)} target="_blank" rel="noreferrer">
+          Příbalová informace (PDF)
+        </a>
+      </p>
+    </div>
   );
 }
 
 function Fact({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
-    <ThemedText type="small">
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}:{' '}
-      </ThemedText>
+    <p className="small">
+      <span className="muted">{label}: </span>
       {value}
-    </ThemedText>
+    </p>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    gap: Spacing.one,
-  },
-  leaflet: {
-    marginTop: Spacing.three,
-  },
-});
