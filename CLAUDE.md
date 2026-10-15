@@ -1,6 +1,6 @@
 # Lékárnička
 
-PWA (Vite + React + TypeScript), deployed on Vercel. See README.md for architecture.
+PWA (Vite + React + TypeScript) on Vercel, plus a push server in `server/` (Node 24 + Hono + SQLite, Docker). See README.md for architecture.
 
 ## Commands
 
@@ -20,5 +20,6 @@ Run typecheck, lint and tests before declaring work done.
 - `scripts/build-data.ts` runs in Node with type stripping, so everything it imports from `src/` (`lib/text.ts`, `lib/variants.ts`, `data/reference-format.ts`) must use explicit `.ts` import paths and no path aliases.
 - UI text is Czech; code and comments are English.
 - The SÚKL REST API has no CORS headers, so the browser can't fetch it; only link to it. The test API (`testprehledy.sukl.cz`) serves outdated documents; use `prehledy.sukl.cz/dlp/v1`.
-- ntfy requests must stay CORS-simple (JSON body sent as `text/plain`, cancel via `GET …/delete`).
+- `server/` runs its `.ts` sources directly on Node 24 (type stripping, `node:sqlite`), so it has no build step: use explicit `.ts` imports and only erasable TypeScript syntax.
+- The app re-sends the whole reminder schedule after every cabinet change (`src/lib/push.ts`); the server just replaces it.
 - `src/lib/ocr.ts` is tested but not wired into the UI yet (planned photo reading via Tesseract.js).

@@ -1,8 +1,8 @@
 import { openDB, type DBSchema } from 'idb';
 import { useEffect, useState } from 'react';
 
-// The user's medicine cabinet, stored in the browser (IndexedDB). Nothing leaves the device
-// except reminder texts sent to the user's own ntfy server (see lib/reminders.ts).
+// The user's medicine cabinet, stored in the browser (IndexedDB). Only the reminder schedule
+// (medicine names and dates) is sent to the push server, and only if notifications are on (lib/push.ts).
 
 export type CabinetItem = {
   id: number;
@@ -24,11 +24,17 @@ interface CabinetSchema extends DBSchema {
   items: { key: number; value: CabinetItem };
 }
 
-const dbPromise = openDB<CabinetSchema>('lekarnicka', 1, {
-  upgrade(db) {
-    db.createObjectStore('items', { keyPath: 'id', autoIncrement: true });
-  },
-});
+let opening: ReturnType<typeof openDB<CabinetSchema>> | null = null;
+
+/** Opened on first use, so importing this module has no side effects. */
+function database() {
+  opening ??= openDB<CabinetSchema>('lekarnicka', 1, {
+    upgrade(db) {
+      db.createObjectStore('items', { keyPath: 'id', autoIncrement: true });
+    },
+  });
+  return opening;
+}
 
 const changes = new EventTarget();
 
@@ -36,9 +42,15 @@ function notifyChange() {
   changes.dispatchEvent(new Event('change'));
 }
 
+/** Calls `listener` after every change to the cabinet. Returns an unsubscribe function. */
+export function onCabinetChange(listener: () => void): () => void {
+  changes.addEventListener('change', listener);
+  return () => changes.removeEventListener('change', listener);
+}
+
 /** Soonest expiry first; items without a date at the end. */
 export async function listItems(): Promise<CabinetItem[]> {
-  const items = await (await dbPromise).getAll('items');
+  const items = await (await database()).getAll('items');
   return items.sort(
     (a, b) =>
       (a.expiresOn ?? '9999').localeCompare(b.expiresOn ?? '9999') || a.name.localeCompare(b.name, 'cs')
@@ -46,11 +58,11 @@ export async function listItems(): Promise<CabinetItem[]> {
 }
 
 export async function getItem(id: number): Promise<CabinetItem | undefined> {
-  return (await dbPromise).get('items', id);
+  return (await database()).get('items', id);
 }
 
 export async function addItem(item: NewCabinetItem): Promise<CabinetItem> {
-  const db = await dbPromise;
+  const db = await database();
   const draft = { ...item, createdAt: new Date().toISOString() } as Omit<CabinetItem, 'id'>;
   // autoIncrement assigns the id when the key is missing.
   const id = await db.add('items', draft as CabinetItem);
@@ -59,18 +71,18 @@ export async function addItem(item: NewCabinetItem): Promise<CabinetItem> {
 }
 
 export async function updateItem(item: CabinetItem): Promise<void> {
-  await (await dbPromise).put('items', item);
+  await (await database()).put('items', item);
   notifyChange();
 }
 
 export async function deleteItem(id: number): Promise<void> {
-  await (await dbPromise).delete('items', id);
+  await (await database()).delete('items', id);
   notifyChange();
 }
 
 /** Replaces the whole cabinet, e.g. when restoring a backup. */
 export async function replaceAll(items: CabinetItem[]): Promise<void> {
-  const db = await dbPromise;
+  const db = await database();
   const tx = db.transaction('items', 'readwrite');
   await tx.store.clear();
   for (const item of items) await tx.store.put(item);
@@ -85,10 +97,10 @@ export function useCabinetItems(): CabinetItem[] | null {
     let active = true;
     const load = () => listItems().then((loaded) => active && setItems(loaded));
     load();
-    changes.addEventListener('change', load);
+    const unsubscribe = onCabinetChange(load);
     return () => {
       active = false;
-      changes.removeEventListener('change', load);
+      unsubscribe();
     };
   }, []);
   return items;

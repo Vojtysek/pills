@@ -5,7 +5,6 @@ import { ItemForm } from '../components/item-form.tsx';
 import { PageHeader, Row } from '../components/ui.tsx';
 import { addItem, type NewCabinetItem } from '../db/cabinet.ts';
 import { searchProducts, useReference, type Product } from '../db/reference.ts';
-import { syncReminders } from '../lib/reminders.ts';
 
 type Selection = { product: Product } | { custom: string };
 
@@ -20,32 +19,12 @@ export function AddPage() {
     const product = preselected ? ref.byCode.get(preselected) : undefined;
     return product ? { product } : null;
   });
-  const [warning, setWarning] = useState<string | null>(null);
 
   const results = searchProducts(ref, deferredQuery);
 
   async function save(item: NewCabinetItem) {
-    const saved = await addItem(item);
-    try {
-      await syncReminders(saved);
-    } catch (e) {
-      // The item is saved either way; tell the user the reminder didn't get scheduled.
-      setWarning(`Lék je uložený, ale upozornění se nepodařilo naplánovat: ${e instanceof Error ? e.message : e}`);
-      return;
-    }
+    await addItem(item);
     navigate('/', { replace: true });
-  }
-
-  if (warning) {
-    return (
-      <div className="page">
-        <PageHeader title="Uloženo" />
-        <p className="error">{warning}</p>
-        <button className="button" type="button" onClick={() => navigate('/', { replace: true })}>
-          Pokračovat
-        </button>
-      </div>
-    );
   }
 
   if (selection) {
