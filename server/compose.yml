@@ -1,0 +1,16 @@
+# The app is served over HTTPS, so browsers only allow calls to an HTTPS API. In production this port
+# sits behind Cloudflare (proxied DNS record + Origin Rule pointing to port 8080), which provides HTTPS.
+services:
+  lekarnicka-push:
+    build: .
+    container_name: lekarnicka-push
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - data:/data
+    ports:
+      - "8080:3000"
+
+volumes:
+  # Named volume: Docker creates it owned by the container's user, so SQLite can write to it.
+  data:

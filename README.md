@@ -1,7 +1,7 @@
 # Lékárnička
 
 A web app (PWA) for a home medicine cabinet: add medicines by searching by name or active substance,
-track expiry dates with push reminders, and find what you have at home for a given complaint
+track expiry dates with push notifications, and find what you have at home for a given complaint
 ("what helps with a headache?"). Data comes from SÚKL, the Czech State Institute for Drug Control.
 
 It installs from the browser ("Add to Home Screen" on iPhone, "Install app" on Android), works offline,
@@ -13,7 +13,8 @@ Requirements: Node.js ≥ 22.12.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm install --prefix server   # push server dependencies (needed for typecheck and its tests)
+npm run dev                   # http://localhost:5173
 ```
 
 Other commands:
@@ -26,13 +27,41 @@ npm run build      # production build into dist/, including the service worker
 npm run preview    # serve the production build locally
 ```
 
-## Deployment (Vercel)
+## Deployment
+
+Two parts: the web app (static files on Vercel) and a small push server (Docker on your own server) that
+sends the expiry notifications.
+
+### Push server (Docker)
+
+Runs at `https://lekarnicka-api.nullbit.cz`: Cloudflare (proxied DNS record + an Origin Rule sending it to
+port 8080) provides HTTPS in front of the container. Browsers only allow an HTTPS app to call an HTTPS API.
+
+First install, in a copy of `server/` on the server:
+
+```bash
+umask 077
+printf "VAPID_SUBJECT=https://lekarnicka.nullbit.cz\nALLOWED_ORIGINS=https://lekarnicka.nullbit.cz\n" > .env
+docker compose build
+docker compose run --rm --no-deps -T lekarnicka-push node -e \
+  'const k=require("web-push").generateVAPIDKeys();console.log("VAPID_PUBLIC_KEY="+k.publicKey+"\nVAPID_PRIVATE_KEY="+k.privateKey)' >> .env
+docker compose up -d
+curl http://127.0.0.1:8080/api/health          # {"ok":true,"devices":0}
+```
+
+Keep `.env`: new VAPID keys invalidate every existing subscription. Data lives in the Docker volume
+`lekarnicka-push_data` (SQLite). To update, copy the new `server/` files over and run `docker compose up -d --build`.
+
+### Web app (Vercel)
 
 Import the repository in Vercel. `vercel.json` sets the build, routes every path to the app and makes sure
 the service worker is never cached. Then:
 
-1. Add the environment variable `VITE_NTFY_URL` (your ntfy server, see `.env.example`).
-2. Add your domain in Vercel → Project → Domains.
+1. Add the environment variable `VITE_API_URL=https://lekarnicka-api.nullbit.cz` (see `.env.example`).
+2. Add the domain `lekarnicka.nullbit.cz` in Vercel → Project → Domains. It must match the server's
+   `ALLOWED_ORIGINS`.
+
+Every push to the main branch deploys automatically.
 
 ## How it works
 
@@ -55,25 +84,25 @@ headers), so it's used only to link to the patient leaflet PDF (`/dokumenty/{kod
 
 ### The cabinet
 
-Stored in the browser's IndexedDB (`src/db/cabinet.ts`) and never sent anywhere. Settings → Záloha exports
+Stored in the browser's IndexedDB (`src/db/cabinet.ts`). Only the notification schedule (medicine names and
+dates) is sent to the push server, and only when notifications are on. Settings → Záloha exports
 and restores it as JSON. On iPhone, data of a web app added to the Home Screen is kept; in a plain Safari tab
 it may be cleared after weeks of not using the site.
 
-### Expiry reminders (ntfy)
+### Expiry notifications (Web Push)
 
-Reminders are scheduled as delayed messages on an [ntfy](https://ntfy.sh) server, 30 days before expiry and
-the morning after (`src/lib/reminders.ts`). Each user gets a random topic and subscribes to it in the ntfy app.
-Each reminder has a fixed sequence ID per item, so editing an item reschedules it and deleting cancels it.
+A web app can't schedule a notification on the phone itself, so the push server does it:
 
-Requirements for the ntfy server (`server.yml`):
+1. In Settings the user turns notifications on; the browser creates a push subscription
+   (`src/lib/push.ts`).
+2. After every change to the cabinet, the app sends the server its whole schedule: one reminder 30 days
+   before expiry and one the morning after, with the medicine name and date only.
+3. The server (`server/`) checks every minute and sends due reminders through the browser's push service
+   (Apple, Google, Mozilla) with the [`web-push`](https://github.com/web-push-libs/web-push) library.
+4. The service worker (`src/sw.ts`) shows the notification; tapping it opens the medicine.
 
-```yaml
-message-delay-limit: 8760h            # allow scheduling a year ahead; the default is 3 days
-upstream-base-url: "https://ntfy.sh"  # instant delivery to the ntfy iOS app from a self-hosted server
-```
-
-and ntfy ≥ 2.16 (cancelling scheduled messages). The public ntfy.sh keeps the 3-day limit, so reminders need
-a self-hosted server.
+On iPhone, Web Push works only for apps added to the Home Screen (iOS 16.4+); the app explains this
+in Settings. Android works in the browser too.
 
 ### Identifying a medicine
 
@@ -100,7 +129,9 @@ src/layout.tsx              tab bar, loading and error screens
 src/pages/                  screens: cabinet, add, item, product, symptoms, settings
 src/db/reference.ts         SÚKL data: loading and in-memory search
 src/db/cabinet.ts           user's cabinet (IndexedDB)
-src/lib/reminders.ts        ntfy scheduling
+src/lib/push.ts             push subscription and reminder schedule
+src/sw.ts                   service worker: offline cache, showing notifications
+server/                     push server (Node 24, Hono, SQLite, Docker)
 src/lib/expiry.ts           expiry dates and reminder times
 src/lib/variants.ts         merging registrations of the same medicine
 src/lib/ocr.ts              recognized text → name, EXP, LOT, SÚKL code (not in the UI yet)

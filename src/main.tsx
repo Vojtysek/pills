@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router';
 
 import { loadReference } from './db/reference.ts';
+import { startPushSync } from './lib/push.ts';
 import { ErrorScreen, Layout } from './layout.tsx';
 import { AddPage } from './pages/add.tsx';
 import { CabinetPage } from './pages/cabinet.tsx';
@@ -14,6 +15,9 @@ import './styles.css';
 
 // Start downloading the SÚKL data right away; screens that need it suspend until it's ready.
 loadReference().catch(() => {});
+
+// Keep the push server's reminder schedule in step with the cabinet.
+startPushSync();
 
 // Ask the browser not to evict the cabinet under storage pressure (granted automatically for installed apps on most browsers).
 navigator.storage?.persist?.().catch(() => {});

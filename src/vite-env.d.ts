@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Default ntfy server offered for expiry reminders, e.g. https://ntfy.example.cz */
-  readonly VITE_NTFY_URL?: string;
+  /** Push server (server/) for expiry notifications, e.g. https://lekarnicka-api.example.cz */
+  readonly VITE_API_URL?: string;
 }
