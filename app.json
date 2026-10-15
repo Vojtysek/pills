@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "pills",
+    "name": "Lékárnička",
     "slug": "pills",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,7 +8,8 @@
     "scheme": "pills",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.anonymous.pills"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,10 +20,6 @@
       },
       "predictiveBackGestureEnabled": false
     },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
     "plugins": [
       "expo-router",
       [
@@ -32,11 +29,30 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      "expo-sqlite",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a455ff01-6209-4070-b468-f3a2b6ee42b1"
+      }
+    },
+    "owner": "vojtysek",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a455ff01-6209-4070-b468-f3a2b6ee42b1"
+    },
+    "platforms": [
+      "ios",
+      "android"
+    ]
   }
 }

@@ -1,18 +1,45 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { SQLiteProvider } from 'expo-sqlite';
+import { Suspense } from 'react';
+import { ActivityIndicator, StyleSheet, useColorScheme, View } from 'react-native';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+import { referenceDbName, removeOutdatedReferenceDb } from '@/db/cabinet';
+import { configureReminders } from '@/lib/reminders';
 
-SplashScreen.preventAutoHideAsync();
+configureReminders();
 
-export default function TabLayout() {
+export default function RootLayout() {
   const colorScheme = useColorScheme();
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
+      {/* First launch copies the bundled SÚKL database out of the app package, which takes a moment. */}
+      <Suspense fallback={<Loading />}>
+        <SQLiteProvider
+          databaseName={referenceDbName}
+          assetSource={{ assetId: require('@/assets/db/sukl.db') }}
+          onInit={removeOutdatedReferenceDb}
+          useSuspense>
+          <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="add" options={{ presentation: 'modal', title: 'Přidat lék' }} />
+            <Stack.Screen name="item/[id]" options={{ title: '' }} />
+            <Stack.Screen name="product/[sukl]" options={{ title: '' }} />
+            <Stack.Screen name="symptom/[id]" options={{ title: '' }} />
+          </Stack>
+        </SQLiteProvider>
+      </Suspense>
     </ThemeProvider>
   );
 }
+
+function Loading() {
+  return (
+    <View style={styles.loading}>
+      <ActivityIndicator />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+});
