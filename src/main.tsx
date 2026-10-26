@@ -4,7 +4,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router';
 
 import { loadReference } from './db/reference.ts';
 import { startPushSync } from './lib/push.ts';
-import { ErrorScreen, Layout } from './layout.tsx';
+import { AdminRoute, ErrorScreen, Layout } from './layout.tsx';
 import { AddPage } from './pages/add.tsx';
 import { CabinetPage } from './pages/cabinet.tsx';
 import { ItemPage } from './pages/item.tsx';
@@ -24,6 +24,11 @@ navigator.storage?.persist?.().catch(() => {});
 
 const router = createBrowserRouter([
   {
+    path: '/admin',
+    errorElement: <ErrorScreen />,
+    element: <AdminRoute />,
+  },
+  {
     element: <Layout />,
     errorElement: <ErrorScreen />,
     children: [
@@ -37,6 +42,17 @@ const router = createBrowserRouter([
     ],
   },
 ]);
+
+// The Matomo snippet in index.html tracks the initial page view; report client-side navigations here.
+let trackedPath = location.pathname;
+router.subscribe((state) => {
+  if (state.location.pathname === trackedPath) return;
+  trackedPath = state.location.pathname;
+  const paq = (window._paq ??= []);
+  paq.push(['setCustomUrl', trackedPath]);
+  paq.push(['setDocumentTitle', document.title]);
+  paq.push(['trackPageView']);
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

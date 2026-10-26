@@ -2,7 +2,7 @@ import { useState, type ChangeEvent } from 'react';
 
 import { listItems, replaceAll, type CabinetItem } from '../db/cabinet.ts';
 import { useReference } from '../db/reference.ts';
-import { disablePush, enablePush, pushSupport, usePushState } from '../lib/push.ts';
+import { disablePush, enablePush, pushSupport, sendTestNotification, usePushState } from '../lib/push.ts';
 
 export function SettingsPage() {
   const ref = useReference();
@@ -24,15 +24,29 @@ function Notifications() {
   const push = usePushState();
   const support = pushSupport();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
 
   async function run(action: () => Promise<void>) {
     setActionError(null);
+    setNotice(null);
     try {
       await action();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  const test = () =>
+    run(async () => {
+      setTesting(true);
+      try {
+        await sendTestNotification();
+        setNotice('Odesláno. Oznámení by mělo během pár sekund dorazit.');
+      } finally {
+        setTesting(false);
+      }
+    });
 
   const error = actionError ?? push.error;
 
@@ -56,6 +70,9 @@ function Notifications() {
         (push.enabled ? (
           <>
             <p className="small">{push.syncing ? 'Ukládám…' : 'Zapnuto'}</p>
+            <button className="button secondary" type="button" disabled={push.syncing || testing} onClick={test}>
+              {testing ? 'Odesílám…' : 'Poslat testovací oznámení'}
+            </button>
             <button className="button danger" type="button" disabled={push.syncing} onClick={() => run(disablePush)}>
               Vypnout upozornění
             </button>
@@ -65,6 +82,7 @@ function Notifications() {
             {push.syncing ? 'Zapínám…' : 'Zapnout upozornění'}
           </button>
         ))}
+      {notice && <p className="small muted">{notice}</p>}
       {error && <p className="small error">{error}</p>}
     </section>
   );

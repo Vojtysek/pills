@@ -49,6 +49,14 @@ docker compose up -d
 curl http://127.0.0.1:8080/api/health          # {"ok":true,"devices":0}
 ```
 
+For the admin dashboard (`/admin` in the app: statistics, broadcasts, devices), add a token:
+
+```bash
+printf "ADMIN_TOKEN=%s\n" "$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n')" >> .env
+docker compose up -d
+grep ADMIN_TOKEN .env      # paste this value on /admin to log in
+```
+
 Keep `.env`: new VAPID keys invalidate every existing subscription. Data lives in the Docker volume
 `lekarnicka-push_data` (SQLite). To update, copy the new `server/` files over and run `docker compose up -d --build`.
 
@@ -130,6 +138,7 @@ src/pages/                  screens: cabinet, add, item, product, symptoms, sett
 src/db/reference.ts         SÚKL data: loading and in-memory search
 src/db/cabinet.ts           user's cabinet (IndexedDB)
 src/lib/push.ts             push subscription and reminder schedule
+src/pages/admin.tsx         admin dashboard (lazy-loaded at /admin)
 src/sw.ts                   service worker: offline cache, showing notifications
 server/                     push server (Node 24, Hono, SQLite, Docker)
 src/lib/expiry.ts           expiry dates and reminder times

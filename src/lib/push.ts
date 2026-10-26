@@ -170,6 +170,18 @@ export async function disablePush(): Promise<void> {
   }
 }
 
+/** Asks the server to send a notification to this device right away. */
+export async function sendTestNotification(): Promise<void> {
+  await syncSchedule(); // make sure the server has the current subscription
+  if (state.error) throw new Error(state.error);
+  const res = await fetch(`${API_URL}/api/devices/${deviceId()}/test`, { method: 'POST' });
+  if (res.status === 429) throw new Error('Testovací oznámení jde poslat jednou za 30 sekund.');
+  if (res.status === 404 || res.status === 410) {
+    throw new Error('Server toto zařízení nezná. Vypněte a znovu zapněte upozornění.');
+  }
+  if (!res.ok) throw new Error(`Oznámení se nepodařilo odeslat (chyba ${res.status}).`);
+}
+
 let queued: Promise<void> = Promise.resolve();
 
 /** Re-sends the schedule. Runs one at a time; errors are kept in the state for the Settings screen. */

@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import { NavLink, Outlet, useRouteError } from 'react-router';
 
 export function Layout() {
@@ -33,5 +33,16 @@ export function ErrorScreen() {
         Zkusit znovu
       </button>
     </div>
+  );
+}
+
+// The admin dashboard is a separate chunk, so regular users never download it.
+const AdminPage = lazy(() => import('./pages/admin.tsx'));
+
+export function AdminRoute() {
+  return (
+    <Suspense fallback={<div className="center">Načítám…</div>}>
+      <AdminPage />
+    </Suspense>
   );
 }
